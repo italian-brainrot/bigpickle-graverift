@@ -22,7 +22,7 @@ public final class GraveRiftConfig {
 
     public static final ModConfigSpec.IntValue HUNGER_AMPLIFIER = BUILDER
             .comment("Amplifier of the Hunger effect applied to the rift owner while the rift is open. 14 = Hunger XV.")
-            .defineInRange("ownerHungerAmplifier", 14, 0, 255);
+            .defineInRange("ownerHungerAmplifier", 30, 0, 255);
 
     public static final ModConfigSpec.IntValue RETURN_WEAKNESS_TICKS = BUILDER
             .comment("Duration of the Weakness effect applied when a player is returned by the rift. 12000 ticks = 10 minutes.")
