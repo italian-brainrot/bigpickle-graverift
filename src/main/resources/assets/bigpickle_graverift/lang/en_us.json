@@ -1,0 +1,13 @@
+{
+  "itemGroup.bigpickle_graverift": "Grave Rift",
+
+  "item.bigpickle_graverift.pierced_ender_pearl": "Pierced Ender Pearl",
+  "item.bigpickle_graverift.grave_rift": "Grave Rift",
+
+  "entity.bigpickle_graverift.grave_rift": "Grave Rift",
+
+  "tooltip.bigpickle_graverift.pierced_ender_pearl": "A cold weight. It remembers what you lost, but cannot yet open the way.",
+  "tooltip.bigpickle_graverift.grave_rift": "Use on a living creature to tear open a path to your last place of death. The path will not remain open for long.",
+
+  "message.bigpickle_graverift.no_last_death": "The rift finds no echo of a death to follow."
+}

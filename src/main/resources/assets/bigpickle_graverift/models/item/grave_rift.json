@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "bigpickle_graverift:item/grave_rift"
+  }
+}

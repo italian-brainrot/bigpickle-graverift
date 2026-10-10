@@ -1,0 +1,13 @@
+{
+  "type": "minecraft:smelting",
+  "category": "misc",
+  "cookingtime": 200,
+  "experience": 0.5,
+  "ingredient": {
+    "item": "bigpickle_graverift:pierced_ender_pearl"
+  },
+  "result": {
+    "count": 1,
+    "id": "bigpickle_graverift:grave_rift"
+  }
+}
