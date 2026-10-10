@@ -65,15 +65,11 @@ void main() {
         color += textureProj(Sampler1, texProj0 * grave_rift_layer(float(i + 1))).rgb * COLORS[i];
     }
 
-    // The renderer hands us a per-vertex tint (hue plus the layer's opacity), so
-    // the discs can share one shader and still read as halo / body / core.
-    vec3 tinted = color * vertexColor.rgb * 2.4;
+    // The renderer hands us a per-vertex tint (kept white for the single opaque diamond). A modest
+    // boost compensates for the palette being darker than the End's so the tear still reads bright
+    // against the world without clipping to white.
+    vec3 tinted = color * vertexColor.rgb * 1.6;
 
-    // Feather along the brightness of the swirl so the discs melt into the world
-    // rather than reading as flat coins, while a floor keeps the near-black core
-    // opaque enough to look like a hole punched straight through.
-    float lum = clamp(max(max(color.r, color.g), color.b) * 14.0, 0.0, 1.0);
-    float alpha = vertexColor.a * mix(0.6, 1.0, lum);
-
-    fragColor = vec4(tinted, alpha);
+    // Fully opaque like the vanilla end portal quad, so the rift stays clean and flicker-free.
+    fragColor = vec4(tinted, 1.0);
 }

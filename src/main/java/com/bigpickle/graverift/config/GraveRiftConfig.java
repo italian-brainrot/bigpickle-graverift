@@ -21,7 +21,7 @@ public final class GraveRiftConfig {
             .defineInRange("mobDamage", 10.0D, 0.0D, 1_000.0D);
 
     public static final ModConfigSpec.IntValue HUNGER_AMPLIFIER = BUILDER
-            .comment("Amplifier of the Hunger effect applied to the rift owner while the rift is open. 14 = Hunger XV.")
+            .comment("Amplifier of the Hunger effect applied to the rift owner while the rift is open. 30 = Hunger XXXI shown in-game.")
             .defineInRange("ownerHungerAmplifier", 30, 0, 255);
 
     public static final ModConfigSpec.IntValue RETURN_WEAKNESS_TICKS = BUILDER

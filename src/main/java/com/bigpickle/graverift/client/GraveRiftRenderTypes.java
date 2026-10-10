@@ -14,6 +14,9 @@ import org.jetbrains.annotations.Nullable;
  * <p>Two vanilla textures are reused (the End sky and the End portal swatch) so the mod ships no
  * binary texture for the effect, but the shader itself is our own, which lets the rift use its own
  * palette instead of the teal/green of the End.</p>
+ *
+ * <p>The rift is drawn as a single fully opaque quad — exactly like the vanilla End portal — rather
+ * than stacked translucent discs, which keeps it clean and flicker-free at any distance.</p>
  */
 public final class GraveRiftRenderTypes {
     private static final ResourceLocation END_SKY =
@@ -30,7 +33,7 @@ public final class GraveRiftRenderTypes {
     public static final RenderType GRAVE_RIFT = RenderType.create(
             "grave_rift",
             DefaultVertexFormat.POSITION_COLOR,
-            VertexFormat.Mode.TRIANGLE_FAN,
+            VertexFormat.Mode.QUADS,
             1536,
             false,
             false,
@@ -40,7 +43,6 @@ public final class GraveRiftRenderTypes {
                             .add(END_SKY, false, false)
                             .add(END_PORTAL, false, false)
                             .build())
-                    .setTransparencyState(RenderStateShard.TRANSLUCENT_TRANSPARENCY)
                     .setCullState(RenderStateShard.NO_CULL)
                     .setDepthTestState(RenderStateShard.LEQUAL_DEPTH_TEST)
                     .setWriteMaskState(RenderStateShard.COLOR_DEPTH_WRITE)

@@ -206,10 +206,14 @@ public class GraveRiftEntity extends Entity {
     }
 
     private void warnMembers(MinecraftServer server) {
+        // Cover the whole remaining lifetime plus a one-second safety margin so the warning is
+        // still ticking when the rift collapses; returnPlayer clears Nausea on arrival, so the
+        // buffer never lingers after the player is pulled back.
+        int duration = this.lifetime + 20;
         for (UUID id : this.members.keySet()) {
             ServerPlayer player = server.getPlayerList().getPlayer(id);
             if (player != null && player.isAlive()) {
-                player.addEffect(new MobEffectInstance(MobEffects.CONFUSION, WARNING_TICKS, 0, false, true, true));
+                player.addEffect(new MobEffectInstance(MobEffects.CONFUSION, duration, 0, false, true, true));
             }
         }
     }
@@ -258,6 +262,8 @@ public class GraveRiftEntity extends Entity {
         player.getFoodData().setFoodLevel(0);
         player.getFoodData().setSaturation(0.0F);
         player.removeEffect(MobEffects.HUNGER);
+        // End the closing warning exactly when the player is yanked back.
+        player.removeEffect(MobEffects.CONFUSION);
         player.addEffect(new MobEffectInstance(
                 MobEffects.WEAKNESS,
                 GraveRiftConfig.RETURN_WEAKNESS_TICKS.get(),
