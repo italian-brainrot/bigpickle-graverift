@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import com.bigpickle.graverift.GraveRiftMod;
 import com.bigpickle.graverift.config.GraveRiftConfig;
 import com.bigpickle.graverift.data.DimensionalPos;
 import com.bigpickle.graverift.data.GraveRiftSavedData;
@@ -27,6 +28,7 @@ import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import org.jetbrains.annotations.Nullable;
@@ -56,8 +58,18 @@ public class GraveRiftEntity extends Entity {
     private static final EntityDataAccessor<Integer> DATA_LIFETIME =
             SynchedEntityData.defineId(GraveRiftEntity.class, EntityDataSerializers.INT);
 
-    /** Ticks remaining before the rift collapses. */
-    private int lifetime = GraveRiftConfig.RIFT_LIFETIME_TICKS.get();
+    /**
+     * Absolute {@link Level#getGameTime()} at which the rift collapses.
+     *
+     * <p>This is deliberately a timestamp and not a tick counter. A rift stops ticking as soon as
+     * its chunk stops entity-ticking, which happens as soon as the player walks (or is teleported)
+     * away from it – Minecraft removes the entity from the level and writes it to disk, then
+     * restores it verbatim when the chunk comes back. A tick counter would therefore freeze for as
+     * long as nobody was nearby and a rift could be walked into minutes after it was opened. Game
+     * time keeps advancing while the rift is unloaded, so the rift always collapses exactly
+     * {@code riftLifetimeTicks} after it was torn open.</p>
+     */
+    private long closeTime;
     /** Player that opened the rift and is paying the Hunger cost. */
     @Nullable
     private UUID riftOwner;
@@ -72,11 +84,65 @@ public class GraveRiftEntity extends Entity {
     /** UUID -> position to return the player to when the rift closes. */
     private final Map<UUID, DimensionalPos> members = new HashMap<>();
 
+    /** Chunk this rift is currently holding a loading ticket for, or null. */
+    @Nullable
+    private ChunkPos heldChunk;
+
     public GraveRiftEntity(EntityType<? extends GraveRiftEntity> entityType, Level level) {
         super(entityType, level);
         this.noPhysics = true;
         this.noCulling = true;
         this.setNoGravity(true);
+        this.closeTime = level.getGameTime() + GraveRiftConfig.RIFT_LIFETIME_TICKS.get();
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Chunk loading
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * Claims a loading ticket for this rift's chunk the moment the rift joins the level.
+     *
+     * <p>A rift has to keep ticking while its owner is on the other side of the world, otherwise
+     * the mechanic is impossible: the entry teleport routinely moves the player thousands of blocks
+     * away, which unloads the rift's chunk, which removes the rift entity from the level entirely
+     * (it is written to disk and only restored if the player ever walks back). A frozen rift never
+     * expires, never warns and never pulls anybody back. Holding the chunk keeps the entity ticking
+     * for the whole lifetime; {@link #close(MinecraftServer)} and {@link #onRemovedFromLevel()} give
+     * the ticket back.</p>
+     */
+    @Override
+    public void onAddedToLevel() {
+        super.onAddedToLevel();
+        this.acquireChunkTicket();
+    }
+
+    private void acquireChunkTicket() {
+        if (this.heldChunk != null || !(this.level() instanceof ServerLevel level)) {
+            return;
+        }
+        ChunkPos chunk = new ChunkPos(this.blockPosition());
+        GraveRiftSavedData.get(level.getServer()).registerRift(this.getUUID(), this.closeTime);
+        GraveRiftMod.riftTickets().forceChunk(level, this.getUUID(), chunk.x, chunk.z, true, true);
+        this.heldChunk = chunk;
+    }
+
+    private void releaseChunkTicket() {
+        ChunkPos chunk = this.heldChunk;
+        this.heldChunk = null;
+        if (chunk != null && this.level() instanceof ServerLevel level) {
+            GraveRiftMod.riftTickets().forceChunk(level, this.getUUID(), chunk.x, chunk.z, false, true);
+            GraveRiftSavedData.get(level.getServer()).unregisterRift(this.getUUID());
+        }
+    }
+
+    @Override
+    public void onRemovedFromLevel() {
+        super.onRemovedFromLevel();
+        // Whatever brought the rift down, the chunk must not stay pinned for it. Member claims are
+        // deliberately left alone: a chunk unload only means "not right now", not "gone", and the
+        // saved claims are what stop a rift from yanking a player who died while it was away.
+        this.releaseChunkTicket();
     }
 
     // ------------------------------------------------------------------------------------------
@@ -92,8 +158,10 @@ public class GraveRiftEntity extends Entity {
             return;
         }
 
-        this.lifetime--;
-        this.entityData.set(DATA_LIFETIME, this.lifetime);
+        int remaining = this.getRemainingTicks();
+        if (remaining != this.entityData.get(DATA_LIFETIME)) {
+            this.entityData.set(DATA_LIFETIME, remaining);
+        }
 
         MinecraftServer server = this.getServer();
         if (server == null) {
@@ -101,19 +169,30 @@ public class GraveRiftEntity extends Entity {
             return;
         }
 
-        applyOwnerHunger(server);
-        spawnAmbientEffects();
-
-        if (!this.warned && this.lifetime <= WARNING_TICKS) {
+        if (!this.warned && remaining <= WARNING_TICKS) {
             this.warned = true;
             warnMembers(server);
         }
 
-        detectEntries();
-
-        if (this.lifetime <= 0) {
+        // Collapse before anything else: a rift that outlived its lifetime because its chunk was
+        // unloaded must never catch anybody on the way back in.
+        if (remaining <= 0) {
             close(server);
+            return;
         }
+
+        applyOwnerHunger(server);
+        spawnAmbientEffects();
+        detectEntries();
+    }
+
+    /** Ticks left before this rift collapses, based on game time rather than on ticks elapsed. */
+    private int getRemainingTicks() {
+        long remaining = this.closeTime - this.level().getGameTime();
+        if (remaining <= 0L) {
+            return 0;
+        }
+        return (int) Math.min(remaining, Integer.MAX_VALUE);
     }
 
     private void applyOwnerHunger(MinecraftServer server) {
@@ -155,9 +234,12 @@ public class GraveRiftEntity extends Entity {
     }
 
     private void detectEntries() {
-        AABB area = this.getBoundingBox().inflate(0.5D);
+        AABB area = this.getBoundingBox().inflate(0.75D);
         for (ServerPlayer player : this.level().getEntitiesOfClass(ServerPlayer.class, area)) {
             if (!player.isAlive() || player.isSpectator()) {
+                continue;
+            }
+            if (!player.getBoundingBox().inflate(0.25D).intersects(area)) {
                 continue;
             }
             // Members are never re-entered: this makes walking back through your own rift, or
@@ -178,7 +260,9 @@ public class GraveRiftEntity extends Entity {
 
         MinecraftServer server = this.getServer();
         if (server != null) {
-            GraveRiftSavedData.get(server).setActiveRift(player.getUUID(), this.getUUID());
+            // The rift only ever *adds* a claim here. Later rifts do not replace it, and dying
+            // removes the claim from every rift at once, so no rift can yank this player back.
+            GraveRiftSavedData.get(server).addActiveRift(player.getUUID(), this.getUUID());
         }
 
         if (this.destination != null && server != null) {
@@ -209,10 +293,11 @@ public class GraveRiftEntity extends Entity {
         // Cover the whole remaining lifetime plus a one-second safety margin so the warning is
         // still ticking when the rift collapses; returnPlayer clears Nausea on arrival, so the
         // buffer never lingers after the player is pulled back.
-        int duration = this.lifetime + 20;
+        int duration = this.getRemainingTicks() + 20;
+        GraveRiftSavedData data = GraveRiftSavedData.get(server);
         for (UUID id : this.members.keySet()) {
             ServerPlayer player = server.getPlayerList().getPlayer(id);
-            if (player != null && player.isAlive()) {
+            if (player != null && player.isAlive() && data.isActiveRift(id, this.getUUID())) {
                 player.addEffect(new MobEffectInstance(MobEffects.CONFUSION, duration, 0, false, true, true));
             }
         }
@@ -227,15 +312,23 @@ public class GraveRiftEntity extends Entity {
         GraveRiftSavedData data = GraveRiftSavedData.get(server);
         for (Map.Entry<UUID, DimensionalPos> entry : this.members.entrySet()) {
             UUID playerId = entry.getKey();
-            data.clearActiveRift(playerId);
+            // The saved data, not this map, decides whether the claim is still live. If the player
+            // died (or was otherwise detached) while this rift was unloaded it could not have been
+            // told, and must not be dragged back to a body they no longer have.
+            if (!data.isActiveRift(playerId, this.getUUID())) {
+                continue;
+            }
+            data.removeActiveRift(playerId, this.getUUID());
 
             ServerPlayer player = server.getPlayerList().getPlayer(playerId);
-            if (player != null && player.isAlive()) {
-                returnPlayer(player, entry.getValue());
-            } else {
+            if (player == null) {
                 // The player is offline. Remember to send them back the next time they log in.
                 data.setPendingReturn(playerId, entry.getValue());
+            } else if (player.isAlive()) {
+                returnPlayer(player, entry.getValue());
             }
+            // Online but dead: their claim was already dropped when they died, so there is nothing
+            // to do for them (and nothing to remember for their next login).
         }
         this.members.clear();
 
@@ -243,6 +336,7 @@ public class GraveRiftEntity extends Entity {
             level.playSound(null, this.getX(), this.getY() + this.getBbHeight() * 0.5D, this.getZ(),
                     SoundEvents.PORTAL_TRAVEL, SoundSource.BLOCKS, 0.8F, 0.45F);
         }
+        this.releaseChunkTicket();
         this.discard();
     }
 
@@ -279,6 +373,10 @@ public class GraveRiftEntity extends Entity {
     /** Removes a player from this rift without teleporting them. Used when they die. */
     public void removeMember(UUID player) {
         this.members.remove(player);
+        MinecraftServer server = this.getServer();
+        if (server != null) {
+            GraveRiftSavedData.get(server).removeActiveRift(player, this.getUUID());
+        }
     }
 
     public void playSpawnSound() {
@@ -326,11 +424,15 @@ public class GraveRiftEntity extends Entity {
 
     @Override
     protected void readAdditionalSaveData(CompoundTag tag) {
-        this.lifetime = tag.contains("Lifetime") ? tag.getInt("Lifetime") : GraveRiftConfig.RIFT_LIFETIME_TICKS.get();
+        if (tag.contains("CloseTime", Tag.TAG_LONG)) {
+            this.closeTime = tag.getLong("CloseTime");
+        } else {
+            this.closeTime = this.level().getGameTime() + GraveRiftConfig.RIFT_LIFETIME_TICKS.get();
+        }
         this.warned = tag.getBoolean("Warned");
         this.riftOwner = tag.hasUUID("Owner") ? tag.getUUID("Owner") : null;
         this.destination = tag.contains("Destination") ? DimensionalPos.fromNbt(tag.getCompound("Destination")) : null;
-        this.entityData.set(DATA_LIFETIME, this.lifetime);
+        this.entityData.set(DATA_LIFETIME, this.getRemainingTicks());
 
         this.members.clear();
         ListTag members = tag.getList("Members", Tag.TAG_COMPOUND);
@@ -342,7 +444,7 @@ public class GraveRiftEntity extends Entity {
 
     @Override
     protected void addAdditionalSaveData(CompoundTag tag) {
-        tag.putInt("Lifetime", this.lifetime);
+        tag.putLong("CloseTime", this.closeTime);
         tag.putBoolean("Warned", this.warned);
         if (this.riftOwner != null) {
             tag.putUUID("Owner", this.riftOwner);

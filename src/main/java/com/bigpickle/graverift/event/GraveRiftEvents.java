@@ -27,11 +27,13 @@ public final class GraveRiftEvents {
     }
 
     /**
-     * Records where a player died and forgets any rift they were inside.
+     * Records where a player died and forgets every rift they were inside.
      *
      * <p>Forgetting is important: respawning creates a brand new {@link ServerPlayer} with the same
      * UUID, and the spec explicitly says a respawned player must not be dragged back by a rift they
-     * "no longer" belong to.</p>
+     * "no longer" belong to. Every rift is un-bound, not just the most recent one, because a player
+     * can walk through several rifts in a row and the last one to be entered is not the only one
+     * holding a claim on them.</p>
      */
     @SubscribeEvent
     public static void onLivingDeath(LivingDeathEvent event) {
@@ -44,17 +46,21 @@ public final class GraveRiftEvents {
         }
 
         GraveRiftSavedData data = GraveRiftSavedData.get(server);
-        data.setLastDeath(player.getUUID(), DimensionalPos.of(player));
-        data.clearPendingReturn(player.getUUID());
+        UUID playerId = player.getUUID();
+        data.setLastDeath(playerId, DimensionalPos.of(player));
+        data.clearPendingReturn(playerId);
 
-        UUID riftId = data.getActiveRift(player.getUUID());
-        if (riftId != null) {
+        for (UUID riftId : data.getActiveRifts(playerId)) {
             GraveRiftEntity rift = findRift(server, riftId);
             if (rift != null) {
-                rift.removeMember(player.getUUID());
+                // Clears the claim in the saved data as well.
+                rift.removeMember(playerId);
             }
-            data.clearActiveRift(player.getUUID());
         }
+        // A rift whose chunk is unloaded is not in the world right now and could not be told. Wipe
+        // the claims here as well, otherwise that rift would still pull the respawned player back
+        // the moment its chunk comes back.
+        data.clearActiveRifts(playerId);
     }
 
     /**
